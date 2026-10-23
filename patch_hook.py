@@ -2,6 +2,7 @@
 
 import argparse
 import hashlib
+import os
 from pathlib import Path
 import sys
 
@@ -30,15 +31,35 @@ def main():
     args = parser.parse_args()
     try:
         candidate = patch_hook(args.original.read_bytes())
-        with args.output.open("xb") as handle:
-            args.output.chmod(0o700)
-            handle.write(candidate)
+        write_output(args.output, candidate)
     except (OSError, ValueError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
     print(f"SHA256 {hashlib.sha256(candidate).hexdigest()}  {args.output}")
     print("Created patched copy only; no hook was installed or executed.")
     return 0
+
+
+def write_output(path, candidate):
+    handle = path.open("xb")
+    identity = None
+    try:
+        with handle:
+            identity = os.fstat(handle.fileno())
+            path.chmod(0o700)
+            handle.write(candidate)
+    except BaseException:
+        # Do not remove another file installed at the destination during a failure.
+        try:
+            current = path.lstat()
+        except FileNotFoundError:
+            current = None
+        if identity is not None and current is not None:
+            if os.path.samestat(identity, current):
+                path.unlink()
+            else:
+                print(f"warning: output was replaced; leaving {path} untouched", file=sys.stderr)
+        raise
 
 
 if __name__ == "__main__":
