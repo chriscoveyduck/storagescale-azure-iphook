@@ -1,0 +1,18 @@
+{
+  "subscription": "00000000-0000-0000-0000-000000000000",
+  "resource_group": "example-scale",
+  "addresses": ["10.0.2.20", "10.0.2.21"],
+  "ip_config_prefix": "example-ces",
+  "nodes": [
+    {
+      "vm": "example-ces01",
+      "nic": "example-ces01-protocol",
+      "ces_node": "ces01.example.test"
+    },
+    {
+      "vm": "example-ces02",
+      "nic": "example-ces02-protocol",
+      "ces_node": "ces02.example.test"
+    }
+  ]
+}

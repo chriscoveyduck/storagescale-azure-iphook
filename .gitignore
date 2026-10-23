@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.coverage
+config.local.json
+mmcesExtendedIpMgmt.azure
+mmcesExtendedIpMgmt.azure.patched
