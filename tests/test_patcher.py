@@ -81,6 +81,9 @@ class PatcherTests(unittest.TestCase):
                     def __enter__(self):
                         return self
 
+                    def fileno(self):
+                        return self.handle.fileno()
+
                     def write(self, content):
                         if operation == "write":
                             self.handle.write(content[:2])
@@ -103,6 +106,48 @@ class PatcherTests(unittest.TestCase):
                 self.assertFalse(output.exists())
                 patch_hook.write_output(output, b"candidate\n")
                 self.assertEqual(output.read_bytes(), b"candidate\n")
+
+    def test_cleanup_preserves_replacement_at_output_path(self):
+        for replacement in ("file", "absent"):
+            with self.subTest(replacement=replacement), tempfile.TemporaryDirectory() as tmp:
+                output = Path(tmp) / "output"
+                moved = Path(tmp) / "moved"
+                real_open = Path.open
+
+                class ReplacedFile:
+                    def __init__(self, handle):
+                        self.handle = handle
+
+                    def __enter__(self):
+                        return self
+
+                    def fileno(self):
+                        return self.handle.fileno()
+
+                    def write(self, content):
+                        self.handle.write(content[:2])
+
+                    def __exit__(self, *args):
+                        self.handle.close()
+                        output.rename(moved)
+                        if replacement == "file":
+                            with real_open(output, "wb") as other:
+                                other.write(b"replacement must survive\n")
+                        raise OSError("close failed")
+
+                def open_output(path, *args, **kwargs):
+                    return ReplacedFile(real_open(path, *args, **kwargs))
+
+                with mock.patch.object(Path, "open", open_output), \
+                        contextlib.redirect_stderr(io.StringIO()) as errors, \
+                        self.assertRaisesRegex(OSError, "close failed"):
+                    patch_hook.write_output(output, b"candidate\n")
+                self.assertEqual(moved.read_bytes(), b"ca")
+                if replacement == "file":
+                    self.assertEqual(output.read_bytes(), b"replacement must survive\n")
+                    self.assertIn("output was replaced", errors.getvalue())
+                else:
+                    self.assertFalse(output.exists())
 
 
 if __name__ == "__main__":

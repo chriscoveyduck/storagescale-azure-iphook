@@ -15,7 +15,11 @@ python3 patch_hook.py /secure/mmcesExtendedIpMgmt.azure \
 
 The output must not exist. The patcher verifies the original, replaces its hook
 functions, preserves IBM's header and dispatcher, and prints the output SHA256.
-If writing the new file fails, the incomplete output is removed so it can be retried.
+If writing the new file fails, the incomplete output is removed so it can be
+retried, provided the destination still identifies the file created by the
+patcher. A concurrently replaced destination is left untouched. Use an output
+directory you control; pathname identity checks do not make a directory writable
+by untrusted users safe.
 It does not install or execute the hook, contact Azure, or modify CES internals.
 IBM's complete script is not distributed.
 

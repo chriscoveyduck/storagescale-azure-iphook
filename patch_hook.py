@@ -2,6 +2,7 @@
 
 import argparse
 import hashlib
+import os
 from pathlib import Path
 import sys
 
@@ -41,13 +42,23 @@ def main():
 
 def write_output(path, candidate):
     handle = path.open("xb")
+    identity = None
     try:
         with handle:
+            identity = os.fstat(handle.fileno())
             path.chmod(0o700)
             handle.write(candidate)
     except BaseException:
-        # Only remove a destination successfully created by this invocation.
-        path.unlink()
+        # Do not remove another file installed at the destination during a failure.
+        try:
+            current = path.lstat()
+        except FileNotFoundError:
+            current = None
+        if identity is not None and current is not None:
+            if os.path.samestat(identity, current):
+                path.unlink()
+            else:
+                print(f"warning: output was replaced; leaving {path} untouched", file=sys.stderr)
         raise
 
 
