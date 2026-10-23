@@ -58,8 +58,8 @@ supported.
 - Local callbacks are serialized with a 20-second `flock` wait. Partial
   operations can be retried, and failures are not reported as success.
 
-New IP configurations use `scale-ces-<service-IP-with-hyphens>`. Existing IBM-style
-`<vm>-ces-<service-IP-with-hyphens>` names are also recognized. Unrecognized
+IP configurations retain IBM's `<vm>-ces-<service-IP-with-hyphens>` naming
+convention, using the owning VM's name. Unrecognized
 names, primary allocations, duplicate allocations and uncertain CES ownership
 are refused.
 
@@ -88,9 +88,45 @@ The generated hook needs IBM `mmksh`, `mmgetstate` and `mmces`, Azure CLI at
 `/usr/bin/az`, `jq`, `curl`, `iproute2` with JSON output, GNU `date`, and
 `/usr/bin/flock`. It uses managed-identity login.
 
-Each identity must be able to list NICs in the subscription, read the relevant
-VMs and instance views, and update the relevant NIC IP configurations. Scope
-write permissions narrowly. This repository does not create role assignments.
+### Managed identity permissions
+
+**Additional permissions are required beyond managing the executing node's
+own NIC.** Every CES node's managed identity must be able to discover peer NICs,
+read peer VM identity and power state, and remove a stale secondary allocation
+from a peer's protocol NIC. Local-NIC-only permissions are insufficient.
+
+| Azure RBAC action | Required scope and purpose |
+|---|---|
+| `Microsoft.Network/networkInterfaces/read` | Subscription scope, because discovery uses the subscription-wide NIC list API, including daemon and protocol NICs |
+| `Microsoft.Compute/virtualMachines/read` | All potential peer CES VMs, to verify VM identity and attached NICs |
+| `Microsoft.Compute/virtualMachines/instanceView/read` | All potential peer CES VMs, to inspect stopped/deallocated state |
+| `Microsoft.Network/networkInterfaces/write` | All participating protocol NICs, to create/remove secondary IP configurations, including on a peer |
+| `Microsoft.Network/virtualNetworks/subnets/read` | Relevant protocol subnets, for subnet access during NIC configuration |
+| `Microsoft.Network/virtualNetworks/subnets/join/action` | Relevant protocol subnets, to authorize assigning an IP configuration to the subnet |
+
+IP-configuration create/delete operations update the NIC; they do not require
+permission to delete the NIC itself. VM start, stop, deallocate and delete
+permissions are **not** needed: the hook observes power state but never fences
+or changes VM power state.
+
+Use custom roles for these actions where practical. Keep NIC write and subnet
+join permissions scoped to the participating protocol resources, not the whole
+subscription. For a simpler but broader built-in-role alternative, subscription
+Reader covers discovery and VM reads, while Network Contributor on the protocol
+NICs and relevant subnets covers network changes. This grants more permissions
+than the listed actions and should be reviewed against your access policy.
+
+Apply permissions to every node identity (or the shared managed identity in use).
+When topology changes, role assignments must cover the new VMs, protocol NICs
+and subnets even though the hook itself needs no repatching. Allow for RBAC
+propagation before enabling failover. Missing permissions cause the operation
+to fail; this repository does not create role assignments.
+
+See Microsoft's [Compute permissions](https://learn.microsoft.com/en-us/azure/role-based-access-control/permissions/compute)
+and [Networking permissions](https://learn.microsoft.com/en-us/azure/role-based-access-control/permissions/networking)
+references for action definitions.
+
+### Installation
 
 Review the generated diff and run `mmksh -n`. Back up the active hook at
 `/var/mmfs/etc/mmcesExtendedIpMgmt` on all CES nodes with ownership and mode
@@ -119,8 +155,7 @@ need an entitled original, `jq`, and IBM `mmksh`:
 
 ```sh
 export IBM_AZURE_HOOK=/secure/mmcesExtendedIpMgmt.azure
-NAMING=legacy python3 -m unittest discover -s tests -v
-NAMING=pool python3 -m unittest discover -s tests -v
+python3 -m unittest discover -s tests -v
 ```
 
 Tests mock Azure, CES, metadata and guest-network operations, without cloud

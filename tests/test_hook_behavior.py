@@ -54,8 +54,7 @@ def nic(vm, configs, mac="00-00-00-00-00-02"):
 def primary(vm, address):
     return {"name": "primary", "privateIPAddress": address, "primary": True, "subnet":{"id":subnet}}
 def config(vm, address=ip, primary=False):
-    prefix = "scale-ces" if os.environ.get("NAMING") == "pool" else vm+"-ces"
-    return {"name": prefix+"-"+ip.replace(".", "-"),
+    return {"name": vm+"-ces-"+ip.replace(".", "-"),
             "privateIPAddress": address, "primary": primary,
             "subnet": {"id": subnet}}
 deleted = state.with_suffix(".peer-deleted").exists()
@@ -361,7 +360,7 @@ function flock_mock {
                 for call in calls:
                     if "create" in call:
                         self.assertEqual(call[call.index("--name")+1],
-                                         "scale-ces-10-0-2-20")
+                                         "example-ces01-ces-10-0-2-20")
 
     def test_whole_enable_failures_do_not_activate_guest(self):
         for case, expected in (("login-error", 22), ("running", 1),
