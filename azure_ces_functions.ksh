@@ -61,7 +61,12 @@ function discoverAzureCesContext
     print -u2 -- "[Azure] Guest interface does not match instance metadata"
     return 1
   }
-  /usr/bin/az login --identity -o none || return $?
+  if [[ -n "${AZURE_CLIENT_ID:-}" ]]
+  then
+    /usr/bin/az login --identity --client-id "$AZURE_CLIENT_ID" -o none || return $?
+  else
+    /usr/bin/az login --identity -o none || return $?
+  fi
   nics=$(listAzureCesNics) || return $?
   local_nic=$(print -r -- "$nics" | jq -ce --arg mac "$mac" --arg vm "$vm_id" '
     [.[] | select(

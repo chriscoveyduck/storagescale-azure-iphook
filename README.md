@@ -86,7 +86,10 @@ with every IBM hook version.
 
 The generated hook needs IBM `mmksh`, `mmgetstate` and `mmces`, Azure CLI at
 `/usr/bin/az`, `jq`, `curl`, `iproute2` with JSON output, GNU `date`, and
-`/usr/bin/flock`. It uses managed-identity login.
+`/usr/bin/flock`. It uses managed-identity login. By default, Azure CLI selects
+the system-assigned identity. To use a user-assigned identity, set
+`AZURE_CLIENT_ID` in the hook's runtime environment to that identity's client
+ID; the hook passes it to `az login --identity --client-id`.
 
 ### Managed identity permissions
 

@@ -188,7 +188,7 @@ class CandidateTests(unittest.TestCase):
         cls.candidate = patch_hook.patch_hook(Path(ORIGINAL).read_bytes()).decode()
 
     def run_case(self, case, helper_only=True, address="10.0.2.20",
-                 actions=None, concurrent=False):
+                 actions=None, concurrent=False, azure_client_id=""):
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
             mock = tmp / "mock.py"
@@ -261,6 +261,7 @@ function flock_mock {
             env = dict(os.environ, CASE=case, STATE=str(state), MOCK=str(mock),
                        ADDRESS=address, PYTHON=sys.executable, LOCKDIR=str(tmp / "held"),
                        MSYS2_ARG_CONV_EXCL="*",
+                       AZURE_CLIENT_ID=azure_client_id,
                        JQ=str(JQ))
             shell = [SHELL, "-c", '. "$@"', "candidate"] if COMPAT else [SHELL]
             commands = [shell + [str(script)] + a for a in (actions or [args])]
@@ -293,6 +294,16 @@ function flock_mock {
                 self.assertEqual(run.returncode, 0, run.stderr)
                 self.assertIn("CREATE_REQUIRED="+expected, run.stdout)
                 self.assertFalse(any("delete" in c for c in calls))
+
+    def test_managed_identity_selection(self):
+        for client_id, expected in (("", ["--identity"]),
+                                    ("shared-identity-client-id",
+                                     ["--identity", "--client-id", "shared-identity-client-id"])):
+            with self.subTest(client_id=client_id):
+                run, calls = self.run_case("free", azure_client_id=client_id)
+                self.assertEqual(run.returncode, 0, run.stderr)
+                login = next(c for c in calls if c[:2] == ["az", "login"])
+                self.assertEqual(login[2:2 + len(expected)], expected)
 
     def test_unsafe_states_do_not_delete(self):
         for case in ("running", "unknown", "stopping", "primary", "unknown-primary",
