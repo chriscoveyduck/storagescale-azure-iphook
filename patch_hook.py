@@ -30,15 +30,25 @@ def main():
     args = parser.parse_args()
     try:
         candidate = patch_hook(args.original.read_bytes())
-        with args.output.open("xb") as handle:
-            args.output.chmod(0o700)
-            handle.write(candidate)
+        write_output(args.output, candidate)
     except (OSError, ValueError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
     print(f"SHA256 {hashlib.sha256(candidate).hexdigest()}  {args.output}")
     print("Created patched copy only; no hook was installed or executed.")
     return 0
+
+
+def write_output(path, candidate):
+    handle = path.open("xb")
+    try:
+        with handle:
+            path.chmod(0o700)
+            handle.write(candidate)
+    except BaseException:
+        # Only remove a destination successfully created by this invocation.
+        path.unlink()
+        raise
 
 
 if __name__ == "__main__":

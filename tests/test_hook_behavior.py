@@ -54,7 +54,10 @@ def nic(vm, configs, mac="00-00-00-00-00-02"):
 def primary(vm, address):
     return {"name": "primary", "privateIPAddress": address, "primary": True, "subnet":{"id":subnet}}
 def config(vm, address=ip, primary=False):
-    return {"name": vm+"-ces-"+ip.replace(".", "-"),
+    name = vm+"-ces-"+ip.replace(".", "-")
+    if os.environ.get("MIXED_CASE"):
+        name = name.upper()
+    return {"name": name,
             "privateIPAddress": address, "primary": primary,
             "subnet": {"id": subnet}}
 deleted = state.with_suffix(".peer-deleted").exists()
@@ -139,6 +142,8 @@ elif "create" in args:
 elif "list" in args and "--query" in args:
     print(local+"-protocol")
 elif "list" in args:
+    if "--subscription" not in args or args[args.index("--subscription")+1] != subscription.split("/")[-1]:
+        sys.exit("NIC discovery must explicitly select the local subscription")
     if case == "list-error":
         sys.exit(26)
     local_configs = [config(local)] if case in ("local", "healthy") or created else []
@@ -199,7 +204,7 @@ class CandidateTests(unittest.TestCase):
         cls.candidate = patch_hook.patch_hook(Path(ORIGINAL).read_bytes()).decode()
 
     def run_case(self, case, helper_only=True, address="10.0.2.20",
-                 actions=None, concurrent=False, azure_client_id=""):
+                 actions=None, concurrent=False, azure_client_id="", mixed_case=False):
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
             mock = tmp / "mock.py"
@@ -274,6 +279,10 @@ function flock_mock {
                        MSYS2_ARG_CONV_EXCL="*",
                        AZURE_CLIENT_ID=azure_client_id,
                        JQ=str(JQ))
+            if mixed_case:
+                env["MIXED_CASE"] = "1"
+            else:
+                env.pop("MIXED_CASE", None)
             shell = [SHELL, "-c", '. "$@"', "candidate"] if COMPAT else [SHELL]
             commands = [shell + [str(script)] + a for a in (actions or [args])]
             if concurrent:
@@ -305,6 +314,19 @@ function flock_mock {
                 self.assertEqual(run.returncode, 0, run.stderr)
                 self.assertIn("CREATE_REQUIRED="+expected, run.stdout)
                 self.assertFalse(any("delete" in c for c in calls))
+
+    def test_case_insensitive_configuration_names(self):
+        for case in ("local", "stopped"):
+            with self.subTest(case=case):
+                run, _ = self.run_case(case, helper_only=False, mixed_case=True)
+                self.assertEqual(run.returncode, 0, run.stderr + run.stdout)
+        delete = ["deleteIP", "guest_mock a del 10.0.2.20/24 dev eth2"]
+        runs, _ = self.run_case("delete-local", helper_only=False,
+                                actions=[delete], mixed_case=True)
+        self.assertEqual(runs[0].returncode, 0, runs[0].stderr)
+        run, calls = self.run_case("name-conflict", mixed_case=True)
+        self.assertNotEqual(run.returncode, 0)
+        self.assertFalse(any("create" in c or "delete" in c for c in calls))
 
     def test_managed_identity_selection(self):
         for client_id, expected in (("", ["--identity"]),

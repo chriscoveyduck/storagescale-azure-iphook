@@ -154,7 +154,7 @@ function prepareAzureCesIP
   print -r -- "$nics" | jq -e --arg id "$azure_nic_id" \
     --arg name "${vm_name}-ces-${address//./-}" --arg ip "$address" '
     [.[] | select((.id | ascii_downcase) == ($id | ascii_downcase)) | .ipConfigurations[]
-      | select(.name == $name and .privateIPAddress != $ip)] | length == 0
+      | select((.name | ascii_downcase) == ($name | ascii_downcase) and .privateIPAddress != $ip)] | length == 0
   ' >/dev/null || {
     print -u2 -- "[Azure] Expected configuration name belongs to another address"
     return 1
@@ -185,7 +185,8 @@ function prepareAzureCesIP
   typeset -l ownerLower="$owner" localNicLower="$azure_nic_id"
   if [[ "$ownerLower" == "$localNicLower" ]]
   then
-    [[ "$config" == "${vm_name}-ces-${address//./-}" ]] || {
+    typeset -l configLower="$config" expectedLower="${vm_name}-ces-${address//./-}"
+    [[ "$configLower" == "$expectedLower" ]] || {
       print -u2 -- "[Azure] Refusing unexpected local allocation"
       return 1
     }
@@ -196,7 +197,8 @@ function prepareAzureCesIP
   peerNicName=$(print -r -- "$peerNic" | jq -er '.name | select(type == "string" and length > 0)') || return $?
   peerResourceGroup=$(print -r -- "$peerNic" | jq -er '.resourceGroup | select(type == "string" and length > 0)') || return $?
   resolveAzureCesPeer "$peerNic" || return $?
-  [[ "$config" == "${peer_name}-ces-${address//./-}" ]] || {
+  typeset -l configLower="$config" expectedLower="${peer_name}-ces-${address//./-}"
+  [[ "$configLower" == "$expectedLower" ]] || {
     print -u2 -- "[Azure] Refusing unexpected peer allocation name"
     return 1
   }
@@ -295,7 +297,7 @@ function deleteIP
   config="${vm_name}-ces-${address//./-}"
   verified=$(/usr/bin/az network nic show --ids "$azure_nic_id" -o json) || return $?
   print -r -- "$verified" | jq -e --arg name "$config" --arg ip "$address" '
-    [.ipConfigurations[] | select(.name == $name)] as $named
+    [.ipConfigurations[] | select((.name | ascii_downcase) == ($name | ascii_downcase))] as $named
     | [.ipConfigurations[] | select(.privateIPAddress == $ip)] as $address
     | (($named | length) == 0 and ($address | length) == 0) or
       (($named | length) == 1 and ($address | length) == 1 and
@@ -304,6 +306,10 @@ function deleteIP
     print -u2 -- "[Azure] Refusing unexpected local configuration"
     return 1
   }
+  config=$(print -r -- "$verified" | jq -er --arg name "$config" '
+    [.ipConfigurations[] | select((.name | ascii_downcase) == ($name | ascii_downcase))]
+    | if length == 0 then $name else .[0].name end
+  ') || return $?
   addresses=$(ip -j -4 address show dev "$interface") || return $?
   count=$(print -r -- "$addresses" | jq -er --arg ip "$address" '
     [.[].addr_info[] | select(.local == $ip)] | length
@@ -322,7 +328,7 @@ function deleteIP
   }
   checkAzureCesAssignment "$address" "$cesNode" remote || return $?
   if print -r -- "$verified" | jq -e --arg name "$config" '
-    [.ipConfigurations[] | select(.name == $name)] | length == 1
+    [.ipConfigurations[] | select((.name | ascii_downcase) == ($name | ascii_downcase))] | length == 1
   ' >/dev/null
   then
     /usr/bin/az network nic ip-config delete --subscription "$subscription" \
@@ -331,7 +337,7 @@ function deleteIP
   fi
   verified=$(/usr/bin/az network nic show --ids "$azure_nic_id" -o json) || return $?
   print -r -- "$verified" | jq -e --arg name "$config" --arg ip "$address" '
-    [.ipConfigurations[] | select(.name == $name or .privateIPAddress == $ip)] | length == 0
+    [.ipConfigurations[] | select((.name | ascii_downcase) == ($name | ascii_downcase) or .privateIPAddress == $ip)] | length == 0
   ' >/dev/null || {
     print -u2 -- "[Azure] Azure removal not confirmed"
     return 1

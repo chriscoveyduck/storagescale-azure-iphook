@@ -68,6 +68,42 @@ class PatcherTests(unittest.TestCase):
             self.assertIn("SHA256 mismatch", result.stderr)
             self.assertFalse(output.exists())
 
+    def test_creation_failures_remove_incomplete_output_and_allow_retry(self):
+        for operation in ("chmod", "write", "flush", "close"):
+            with self.subTest(operation=operation), tempfile.TemporaryDirectory() as tmp:
+                output = Path(tmp) / "output"
+                real_open = Path.open
+
+                class FailingFile:
+                    def __init__(self, handle):
+                        self.handle = handle
+
+                    def __enter__(self):
+                        return self
+
+                    def write(self, content):
+                        if operation == "write":
+                            self.handle.write(content[:2])
+                            raise OSError("write failed")
+                        return self.handle.write(content)
+
+                    def __exit__(self, *args):
+                        self.handle.close()
+                        if operation in ("flush", "close"):
+                            raise OSError(f"{operation} failed")
+
+                def open_output(path, *args, **kwargs):
+                    return FailingFile(real_open(path, *args, **kwargs))
+
+                with mock.patch.object(Path, "open", open_output), \
+                        mock.patch.object(Path, "chmod", side_effect=OSError("chmod failed")
+                                          if operation == "chmod" else None), \
+                        self.assertRaises(OSError):
+                    patch_hook.write_output(output, b"candidate\n")
+                self.assertFalse(output.exists())
+                patch_hook.write_output(output, b"candidate\n")
+                self.assertEqual(output.read_bytes(), b"candidate\n")
+
 
 if __name__ == "__main__":
     unittest.main()
