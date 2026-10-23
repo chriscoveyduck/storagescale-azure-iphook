@@ -49,7 +49,7 @@ def nic_id(vm):
     return nic_group + "/providers/Microsoft.Network/networkInterfaces/" + vm + "-protocol"
 def nic(vm, configs, mac="00-00-00-00-00-02"):
     return {"id": nic_id(vm), "name": vm+"-protocol", "macAddress": mac,
-            "resourceGroup":"EXAMPLE-SCALE",
+            "resourceGroup":nic_id(vm).split("/")[4],
             "virtualMachine": {"id": vm_id(vm)}, "ipConfigurations": configs}
 def primary(vm, address):
     return {"name": "primary", "privateIPAddress": address, "primary": True, "subnet":{"id":subnet}}
@@ -114,11 +114,22 @@ elif "get-instance-view" in args:
            "stopping":"PowerState/stopping",
            "deallocated":"PowerState/deallocated"}.get(case, "PowerState/stopped"))
 elif "delete" in args:
+    required = ("--subscription", "--resource-group", "--nic-name", "--name", "-o")
+    if (args[:5] != ["az", "network", "nic", "ip-config", "delete"] or
+            len(args[5:]) != 2 * len(required) or
+            set(args[5::2]) != set(required)):
+        sys.exit("Unsupported IP configuration delete arguments: "+repr(args))
+    options = dict(zip(args[5::2], args[6::2]))
+    target = local if options["--nic-name"] == local+"-protocol" else peer
+    if (options["--subscription"] != subscription.split("/")[-1] or
+            options["--resource-group"] != nic_id(target).split("/")[4] or
+            options["--nic-name"] != target+"-protocol" or
+            options["--name"] != config(target)["name"] or options["-o"] != "none"):
+        sys.exit("Incorrect IP configuration delete target: "+repr(args))
     if case == "delete-error" or (case == "delete-once-error" and
                                  sum("delete" in c for c in calls) == 1):
         sys.exit(24)
-    state.with_suffix(".local-deleted" if any(nic_id(local)+"/ipConfigurations/" in a for a in args)
-                      else ".peer-deleted").touch()
+    state.with_suffix(".local-deleted" if target == local else ".peer-deleted").touch()
 elif "create" in args:
     if case == "slow":
         time.sleep(0.5)
@@ -324,7 +335,8 @@ function flock_mock {
                 if case == "third-node":
                     self.assertIn("example-ces03-protocol", " ".join(deleted[0]))
                 if case == "cross-group":
-                    self.assertIn("OTHER-GROUP", " ".join(deleted[0]))
+                    self.assertEqual(deleted[0][deleted[0].index("--resource-group")+1],
+                                     "OTHER-GROUP")
 
     def test_addresses_are_discovered_not_baked_in(self):
         run, calls = self.run_case("dynamic-address", helper_only=False, address="10.0.2.77")
@@ -462,6 +474,20 @@ function flock_mock {
         self.assertEqual([r.returncode for r in runs], [24, 0],
                          [(r.returncode, r.stderr) for r in runs])
         self.assertEqual(sum("delete" in c for c in calls), 2)
+
+    def test_delete_mock_rejects_unsupported_arguments(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            env = dict(os.environ, CASE="stopped", STATE=str(Path(tmp) / "calls"))
+            for args in (
+                    ["--ids", "/subscriptions/s/resourceGroups/g/providers/Microsoft.Network/"
+                     "networkInterfaces/n/ipConfigurations/c", "-o", "none"],
+                    ["--name", "c", "-o", "none"]):
+                with self.subTest(args=args):
+                    run = subprocess.run(
+                        [sys.executable, "-c", MOCK, "az", "network", "nic", "ip-config",
+                         "delete"] + args, capture_output=True, text=True, env=env)
+                    self.assertNotEqual(run.returncode, 0)
+                    self.assertIn("Unsupported IP configuration delete arguments", run.stderr)
 
     def test_guest_success_requires_readback(self):
         run, _ = self.run_case("guest-unconfirmed", helper_only=False)

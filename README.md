@@ -162,6 +162,9 @@ python3 -m unittest discover -s tests -v
 ```
 
 Tests mock Azure, CES, metadata and guest-network operations, without cloud
-mutations. Set `JQ` if it is not on PATH. Windows uses Git Bash and an emulated
+mutations. IP-configuration deletion mocks reject unsupported CLI arguments and
+verify explicit subscription, resource group, NIC and configuration names,
+including cross-resource-group peer release and local deletion retries.
+Set `JQ` if it is not on PATH. Windows uses Git Bash and an emulated
 lock rather than native Korn-shell/flock semantics. Do not commit entitled
 originals or generated hooks.

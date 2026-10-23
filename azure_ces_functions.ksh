@@ -148,7 +148,7 @@ function resolveAzureCesPeer
 
 function prepareAzureCesIP
 {
-  typeset address=$1 matches count owner config primary peerNic state
+  typeset address=$1 matches count owner config primary peerNic peerNicName peerResourceGroup state
   checkAzureCesAssignment "$address" "$cesNode" || return $?
   nics=$(listAzureCesNics) || return $?
   print -r -- "$nics" | jq -e --arg id "$azure_nic_id" \
@@ -193,6 +193,8 @@ function prepareAzureCesIP
     return 0
   fi
   peerNic=$(print -r -- "$matches" | jq -c '.[0].nic') || return $?
+  peerNicName=$(print -r -- "$peerNic" | jq -er '.name | select(type == "string" and length > 0)') || return $?
+  peerResourceGroup=$(print -r -- "$peerNic" | jq -er '.resourceGroup | select(type == "string" and length > 0)') || return $?
   resolveAzureCesPeer "$peerNic" || return $?
   [[ "$config" == "${peer_name}-ces-${address//./-}" ]] || {
     print -u2 -- "[Azure] Refusing unexpected peer allocation name"
@@ -205,7 +207,9 @@ function prepareAzureCesIP
     return 1
   }
   checkAzureCesAssignment "$address" "$cesNode" || return $?
-  /usr/bin/az network nic ip-config delete --ids "$owner/ipConfigurations/$config" -o none || return $?
+  /usr/bin/az network nic ip-config delete --subscription "$subscription" \
+    --resource-group "$peerResourceGroup" --nic-name "$peerNicName" \
+    --name "$config" -o none || return $?
   nics=$(listAzureCesNics) || return $?
   print -r -- "$nics" | jq -e --arg ip "$address" --arg subnet "$subnet" '
     [.[] | .ipConfigurations[] | select(.privateIPAddress == $ip and
@@ -321,7 +325,9 @@ function deleteIP
     [.ipConfigurations[] | select(.name == $name)] | length == 1
   ' >/dev/null
   then
-    /usr/bin/az network nic ip-config delete --ids "$azure_nic_id/ipConfigurations/$config" -o none || return $?
+    /usr/bin/az network nic ip-config delete --subscription "$subscription" \
+      --resource-group "$resource_group" --nic-name "$azure_nic_name" \
+      --name "$config" -o none || return $?
   fi
   verified=$(/usr/bin/az network nic show --ids "$azure_nic_id" -o json) || return $?
   print -r -- "$verified" | jq -e --arg name "$config" --arg ip "$address" '
