@@ -1,7 +1,6 @@
 * text=auto
 *.py text eol=lf
-*.in text eol=lf
-*.patch.in whitespace=-blank-at-eol
+*.ksh text eol=lf
 *.json text eol=lf
 *.yml text eol=lf
 *.md text eol=lf

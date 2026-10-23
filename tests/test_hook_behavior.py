@@ -14,9 +14,9 @@ import shutil
 
 ORIGINAL = os.environ.get("IBM_AZURE_HOOK")
 JQ = shutil.which("jq") or os.environ.get("JQ")
-CONFIG = patch_hook.load_config(ROOT / "config.example.json")
 COMPAT = os.name == "nt"
 SHELL = r"C:\Program Files\Git\bin\bash.exe" if COMPAT else "/usr/lpp/mmfs/bin/mmksh"
+TIMEOUT = 120 if COMPAT else 30
 MOCK = r'''
 import io, json, os, pathlib, sys, time
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, newline="\n")
@@ -34,17 +34,49 @@ if not guestfile.exists():
 subnet = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/example-network/providers/Microsoft.Network/virtualNetworks/v/subnets/protocol"
 local = "example-ces01"
 peer = "example-ces02"
+if case == "third-node":
+    peer = "example-ces03"
 ip = "10.0.2.20"
+if case == "dynamic-address":
+    ip = "10.0.2.77"
+subscription = "/subscriptions/00000000-0000-0000-0000-000000000000"
+group = subscription + "/resourceGroups/EXAMPLE-SCALE"
+def vm_id(vm):
+    vm_group = group.replace("EXAMPLE-SCALE", "OTHER-GROUP") if case == "cross-group" and vm == peer else group
+    return vm_group + "/providers/Microsoft.Compute/virtualMachines/" + vm
+def nic_id(vm):
+    nic_group = group.replace("EXAMPLE-SCALE", "OTHER-GROUP") if case == "cross-group" and vm == peer else group
+    return nic_group + "/providers/Microsoft.Network/networkInterfaces/" + vm + "-protocol"
+def nic(vm, configs, mac="00-00-00-00-00-02"):
+    return {"id": nic_id(vm), "name": vm+"-protocol", "macAddress": mac,
+            "resourceGroup":"EXAMPLE-SCALE",
+            "virtualMachine": {"id": vm_id(vm)}, "ipConfigurations": configs}
+def primary(vm, address):
+    return {"name": "primary", "privateIPAddress": address, "primary": True, "subnet":{"id":subnet}}
 def config(vm, address=ip, primary=False):
-    prefix = "example-ces" if os.environ.get("NAMING") == "pool" else vm+"-ces"
+    prefix = "scale-ces" if os.environ.get("NAMING") == "pool" else vm+"-ces"
     return {"name": prefix+"-"+ip.replace(".", "-"),
             "privateIPAddress": address, "primary": primary,
             "subnet": {"id": subnet}}
 deleted = state.with_suffix(".peer-deleted").exists()
 local_deleted = state.with_suffix(".local-deleted").exists()
 created = state.with_suffix(".created").exists()
-if args[0] == "ces":
-    n = sum(c[0] == "ces" for c in calls)
+if args[0] == "state":
+    if case == "local-state-error":
+        sys.exit(35)
+    print("mmgetstate::0:1:::ces01.example.test:1:active:")
+elif args[0] == "ces" and args[1] == "node":
+    if case == "node-list-error":
+        sys.exit(36)
+    print("mmces:nodeList:0:1:::1:ces01.example.test:ces01-daemon.example.test:10.0.1.4:e::")
+    if case not in ("not-ces-peer", "single-node"):
+        print("mmces:nodeList:0:1:::2:ces02.example.test:ces02-daemon.example.test:10.0.1.5:e::")
+    if case == "third-node":
+        print("mmces:nodeList:0:1:::3:ces03.example.test:ces03-daemon.example.test:10.0.1.6:e::")
+    if case == "ambiguous-peer":
+        print("mmces:nodeList:0:1:::4:ces04.example.test:ces04-daemon.example.test:10.0.1.5:e::")
+elif args[0] == "ces":
+    n = sum(c[0:2] == ["ces", "address"] for c in calls)
     if case == "ces-error":
         sys.exit(21)
     if case == "no-assignment":
@@ -64,6 +96,9 @@ elif args[0] == "guest":
     if case != "guest-unconfirmed":
         guestfile.write_text("no" if "del" in args else "yes")
 elif args[0] == "ip":
+    if "link" in args:
+        print(json.dumps([{"address":"02:00:00:00:00:01"}]))
+        sys.exit(0)
     if case == "guest-inspect-error":
         sys.exit(31)
     if case == "guest-inspect-malformed":
@@ -83,7 +118,7 @@ elif "delete" in args:
     if case == "delete-error" or (case == "delete-once-error" and
                                  sum("delete" in c for c in calls) == 1):
         sys.exit(24)
-    state.with_suffix(".local-deleted" if local+"-protocol" in args
+    state.with_suffix(".local-deleted" if any(nic_id(local)+"/ipConfigurations/" in a for a in args)
                       else ".peer-deleted").touch()
 elif "create" in args:
     if case == "slow":
@@ -100,7 +135,7 @@ elif "list" in args:
     if case == "name-conflict":
         local_configs = [config(local, "10.0.2.99")]
     remote_configs = []
-    if case not in ("free", "free-ownership-change", "local", "healthy", "slow", "name-conflict", "create-error",
+    if case not in ("free", "single-node", "free-ownership-change", "local", "healthy", "slow", "name-conflict", "create-error",
                     "unconfirmed", "guest-error", "guest-once-error", "guest-unconfirmed",
                     "guest-inspect-error", "guest-inspect-malformed",
                     "login-error", "mixed", "guest-only"):
@@ -111,12 +146,25 @@ elif "list" in args:
             if case == "unexpected-config":
                 c["name"] = "not-our-service"
             remote_configs = [c]
-    nics = [{"name":local+"-protocol", "ipConfigurations":local_configs},
-            {"name":("unrelated-nic" if case == "unexpected-nic" else peer+"-protocol"),
-             "ipConfigurations":remote_configs}]
+    peer_primary_ip = "10.0.1.6" if case == "third-node" else "10.0.1.5"
+    nics = [nic(local, [primary(local, "10.0.1.4")] + local_configs, "02-00-00-00-00-01"),
+            nic(peer, [primary(peer, peer_primary_ip)] + remote_configs)]
+    if case == "unexpected-nic":
+        nics[1]["virtualMachine"]["id"] = vm_id("unrelated")
+    if case == "duplicate-mac":
+        nics.append(nic(local, [], "02-00-00-00-00-01"))
+    if case == "unattached-nic":
+        nics.append({"id":nic_id("unattached"), "name":"unattached",
+                     "virtualMachine":None, "macAddress":None, "ipConfigurations":[]})
     if case == "ambiguous":
-        nics.append({"name":"third", "ipConfigurations":[config(peer)]})
+        nics.append(nic("third", [config(peer)]))
     print(json.dumps(nics))
+elif args[1:3] == ["vm", "show"]:
+    if case == "vm-show-error":
+        sys.exit(37)
+    print(json.dumps({"id":vm_id(peer), "name":peer, "networkProfile":{"networkInterfaces":[
+        {"id":nic_id("unrelated" if case == "detached-peer" else peer)}
+    ]}}))
 elif "show" in args:
     if "--query" in args:
         print(subnet)
@@ -138,7 +186,7 @@ else:
 class CandidateTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.candidate = patch_hook.patch_hook(Path(ORIGINAL).read_bytes(), CONFIG).decode()
+        cls.candidate = patch_hook.patch_hook(Path(ORIGINAL).read_bytes()).decode()
 
     def run_case(self, case, helper_only=True, address="10.0.2.20",
                  actions=None, concurrent=False):
@@ -150,14 +198,12 @@ class CandidateTests(unittest.TestCase):
             prefix = '''
 function az_mock { "$PYTHON" "$MOCK" az "$@"; }
 function ces_mock { "$PYTHON" "$MOCK" ces "$@"; }
+function state_mock { "$PYTHON" "$MOCK" state "$@"; }
 function guest_mock { "$PYTHON" "$MOCK" guest "$@"; }
 function curl {
-  case "$*" in
-    *network/interface*) print -- '[{"macAddress":"70A8A566CDB1"}]' ;;
-    *compute/name*) print -- example-ces01 ;;
-    *compute/resourceGroupName*) print -- EXAMPLE-SCALE ;;
-    *) return 30 ;;
-  esac
+  if [[ "$CASE" == metadata-error ]]; then return 30; fi
+  if [[ "$CASE" == metadata-malformed ]]; then print -- '{broken'; return 0; fi
+  print -- '{"compute":{"name":"example-ces01","subscriptionId":"00000000-0000-0000-0000-000000000000","resourceGroupName":"EXAMPLE-SCALE"},"network":{"interface":[{"macAddress":"020000000001"}]}}'
 }
 function ip {
   if [[ "$1" == -j ]]
@@ -166,15 +212,15 @@ function ip {
     return $?
   fi
   print -- '3: eth2: <BROADCAST,UP> mtu 1500'
-  print -- '    link/ether 70:a8:a5:66:cd:b1 brd ff:ff:ff:ff:ff:ff'
+  print -- '    link/ether 02:00:00:00:00:01 brd ff:ff:ff:ff:ff:ff'
 }
 '''
             code = self.candidate
             if helper_only:
-                start = code.index("# Azure CES hook helpers;")
-                code = code[start:code.index("function reconcileAzureCesIP", start)]
+                code = code[code.index("function logAzureCesEvent"):code.index("function reconcileAzureCesIP")]
             code = code.replace("/usr/bin/az", "az_mock")
             code = code.replace("/usr/lpp/mmfs/bin/mmces", "ces_mock")
+            code = code.replace("/usr/lpp/mmfs/bin/mmgetstate", "state_mock")
             code = code.replace("/usr/sbin/ip a replace", "guest_mock a replace")
             code = code.replace(
                 "/var/mmfs/etc/.azure-ces-ip.lock",
@@ -182,8 +228,8 @@ function ip {
             )
             if helper_only:
                 code += (
-                    '\nazure_ces_create_required=$(prepareAzureCesIP "$ADDRESS" example-ces01-protocol '
-                    'EXAMPLE-SCALE example-ces01)\n'
+                    '\ndiscoverAzureCesContext eth2 || exit $?\n'
+                    'azure_ces_create_required=$(prepareAzureCesIP "$ADDRESS")\n'
                     'rc=$?; print -- "CREATE_REQUIRED=$azure_ces_create_required"; exit $rc\n'
                 )
                 args = []
@@ -203,10 +249,9 @@ function print {
 function jq { "$JQ" -b "$@"; }
 # Compatibility-only lock: tests mutual exclusion, NOT native mmksh/flock semantics.
 function flock_mock {
-  local n=0
+  local deadline=$((SECONDS + 20))
   while ! mkdir "$LOCKDIR" 2>/dev/null; do
-    ((n+=1))
-    [[ $n -le 200 ]] || return 1
+    [[ $SECONDS -lt $deadline ]] || return 1
     sleep 0.1
   done
   trap 'rmdir "$LOCKDIR"' EXIT
@@ -225,11 +270,11 @@ function flock_mock {
                              stderr=subprocess.PIPE, text=True, env=env) for command in commands]
                 runs = []
                 for p in processes:
-                    out, err = p.communicate(timeout=30)
+                    out, err = p.communicate(timeout=TIMEOUT)
                     runs.append(subprocess.CompletedProcess(p.args, p.returncode, out, err))
             else:
                 runs = [subprocess.run(command, capture_output=True, text=True,
-                        timeout=30, env=env) for command in commands]
+                        timeout=TIMEOUT, env=env) for command in commands]
             run = runs if actions else runs[0]
             calls = [json.loads(l) for l in state.read_text().splitlines()] if state.exists() else []
             return run, calls
@@ -243,7 +288,7 @@ function flock_mock {
                 self.assertIn("CREATE_REQUIRED=yes", run.stdout)
 
     def test_free_and_local(self):
-        for case, expected in (("free", "yes"), ("local", "no")):
+        for case, expected in (("free", "yes"), ("local", "no"), ("single-node", "yes")):
             with self.subTest(case=case):
                 run, calls = self.run_case(case)
                 self.assertEqual(run.returncode, 0, run.stderr)
@@ -259,10 +304,38 @@ function flock_mock {
                 self.assertNotEqual(run.returncode, 0)
                 self.assertFalse(any("delete" in c for c in calls), calls)
 
+    def test_dynamic_peer_discovery(self):
+        for case in ("third-node", "cross-group", "unattached-nic"):
+            with self.subTest(case=case):
+                run, calls = self.run_case(case, helper_only=False)
+                self.assertEqual(run.returncode, 0, run.stderr + run.stdout)
+                deleted = [c for c in calls if "delete" in c]
+                self.assertEqual(len(deleted), 1)
+                if case == "third-node":
+                    self.assertIn("example-ces03-protocol", " ".join(deleted[0]))
+                if case == "cross-group":
+                    self.assertIn("OTHER-GROUP", " ".join(deleted[0]))
+
+    def test_addresses_are_discovered_not_baked_in(self):
+        run, calls = self.run_case("dynamic-address", helper_only=False, address="10.0.2.77")
+        self.assertEqual(run.returncode, 0, run.stderr + run.stdout)
+        create = next(c for c in calls if "create" in c)
+        self.assertEqual(create[create.index("--private-ip-address") + 1], "10.0.2.77")
+
+    def test_unverified_discovery_never_mutates(self):
+        for case in ("metadata-error", "metadata-malformed", "local-state-error",
+                     "node-list-error", "vm-show-error", "not-ces-peer",
+                     "ambiguous-peer", "detached-peer", "duplicate-mac"):
+            with self.subTest(case=case):
+                run, calls = self.run_case(case, helper_only=False)
+                self.assertNotEqual(run.returncode, 0)
+                self.assertFalse(any("create" in c or "delete" in c or c[0] == "guest"
+                                     for c in calls), calls)
+
     def test_unsupported_address(self):
         run, calls = self.run_case("stopped", address="10.0.2.99")
         self.assertNotEqual(run.returncode, 0)
-        self.assertEqual(calls, [])
+        self.assertFalse(any("create" in c or "delete" in c for c in calls))
 
     def test_errors_propagate(self):
         for case, expected in (("ces-error", 21), ("power-error", 23),
@@ -288,7 +361,7 @@ function flock_mock {
                 for call in calls:
                     if "create" in call:
                         self.assertEqual(call[call.index("--name")+1],
-                                         "example-ces-10-0-2-20")
+                                         "scale-ces-10-0-2-20")
 
     def test_whole_enable_failures_do_not_activate_guest(self):
         for case, expected in (("login-error", 22), ("running", 1),
