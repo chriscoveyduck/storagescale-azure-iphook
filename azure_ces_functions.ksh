@@ -40,6 +40,7 @@ function listAzureCesNics
 
 function discoverAzureCesContext
 {
+  # Shared context is global: ksh93 function-syntax callees cannot set caller locals.
   typeset interface=$1 metadata link mac localState
   metadata=$(curl -fsS --connect-timeout 5 --max-time 15 --noproxy "*" \
     -H "Metadata:true" \
@@ -102,6 +103,7 @@ function discoverAzureCesContext
 
 function resolveAzureCesPeer
 {
+  # peer_vm_id, peer_vm and peer_name are outputs consumed by prepareAzureCesIP.
   typeset nic=$1 peerNics daemonAddresses matches
   peer_vm_id=$(print -r -- "$nic" | jq -er '.virtualMachine.id | select(type == "string" and length > 0)') || return $?
   typeset -l peerIdLower="$peer_vm_id" localIdLower="$vm_id"
@@ -227,7 +229,6 @@ function prepareAzureCesIP
 function reconcileAzureCesIP
 {
   typeset ipWithMask=$4 interface=$6 address=${4%/*} create verified addresses count
-  typeset subscription vm_name resource_group vm_id nics local_nic azure_nic_id azure_nic_name subnet cesNode cesNodes
   discoverAzureCesContext "$interface" || return $?
   create=$(prepareAzureCesIP "$address") || return $?
   if [[ "$create" == yes ]]
@@ -290,7 +291,6 @@ function cleanupIP
 function deleteIP
 {
   typeset address=${4%/*} interface=$6 verified config count addresses
-  typeset subscription vm_name resource_group vm_id nics local_nic azure_nic_id azure_nic_name subnet cesNode cesNodes
   lockAzureCesIP || return $?
   discoverAzureCesContext "$interface" || return $?
   checkAzureCesAssignment "$address" "$cesNode" remote || return $?

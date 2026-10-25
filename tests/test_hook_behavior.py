@@ -15,7 +15,9 @@ import shutil
 ORIGINAL = os.environ.get("IBM_AZURE_HOOK")
 JQ = shutil.which("jq") or os.environ.get("JQ")
 COMPAT = os.name == "nt"
-SHELL = r"C:\Program Files\Git\bin\bash.exe" if COMPAT else "/usr/lpp/mmfs/bin/mmksh"
+SHELL = os.environ.get("KSH") or (
+    r"C:\Program Files\Git\bin\bash.exe" if COMPAT else "/usr/lpp/mmfs/bin/mmksh"
+)
 TIMEOUT = 120 if COMPAT else 30
 MOCK = r'''
 import io, json, os, pathlib, sys, time
@@ -197,11 +199,59 @@ else:
 '''
 
 
-@unittest.skipUnless(ORIGINAL and JQ, "Set IBM_AZURE_HOOK and install jq (or set JQ)")
+@unittest.skipUnless(JQ and Path(SHELL).is_file(), "Install jq and set KSH to a Korn shell")
 class CandidateTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.candidate = patch_hook.patch_hook(Path(ORIGINAL).read_bytes()).decode()
+        if not COMPAT:
+            probe = subprocess.run(
+                [SHELL, "-c", "function inner { value=changed; }; "
+                 "function outer { typeset value=local; inner; print -r -- \"$value\"; }; "
+                 "outer; print -r -- \"$value\""],
+                capture_output=True, text=True, check=True,
+            )
+            if probe.stdout.splitlines() != ["local", "changed"]:
+                raise RuntimeError("KSH must implement ksh93 function static scoping, not Bash semantics")
+        if ORIGINAL:
+            cls.candidate = patch_hook.patch_hook(Path(ORIGINAL).read_bytes()).decode()
+        else:
+            # Exercise the shipped replacement functions without distributing IBM source.
+            cls.candidate = patch_hook.FUNCTIONS.read_text(encoding="utf-8") + '''
+funcName=$1
+shift
+cmd=$1
+${funcName} ${cmd}
+rc=$?
+return ${rc}
+'''
+
+    @unittest.skipIf(COMPAT, "Requires native ksh93 static function scoping")
+    def test_ksh93_caller_context_shadowing_reproducer(self):
+        original = self.candidate
+        declaration = (
+            "  typeset subscription vm_name resource_group vm_id nics local_nic "
+            "azure_nic_id azure_nic_name subnet cesNode cesNodes\n"
+        )
+        try:
+            for function, case, action in (
+                ("reconcileAzureCesIP", "free",
+                 ["enableIP", "guest_mock a replace 10.0.2.20/24 dev eth2"]),
+                ("deleteIP", "delete-local",
+                 ["deleteIP", "guest_mock a del 10.0.2.20/24 dev eth2"]),
+            ):
+                with self.subTest(function=function):
+                    marker = f"function {function}\n{{\n"
+                    self.candidate = original.replace(marker, marker + declaration, 1)
+                    runs, calls = self.run_case(case, helper_only=False, actions=[action])
+                    self.assertNotEqual(runs[0].returncode, 0)
+                    expected = ("ownership of 10.0.2.20 for "
+                                if function == "reconcileAzureCesIP"
+                                else "Refusing unexpected local configuration")
+                    self.assertIn(expected, runs[0].stderr)
+                    self.assertFalse(any("create" in c or "delete" in c or c[0] == "guest"
+                                         for c in calls))
+        finally:
+            self.candidate = original
 
     def run_case(self, case, helper_only=True, address="10.0.2.20",
                  actions=None, concurrent=False, azure_client_id="", mixed_case=False):
