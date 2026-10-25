@@ -244,7 +244,10 @@ return ${rc}
                     self.candidate = original.replace(marker, marker + declaration, 1)
                     runs, calls = self.run_case(case, helper_only=False, actions=[action])
                     self.assertNotEqual(runs[0].returncode, 0)
-                    self.assertIn("ownership of 10.0.2.20 for ", runs[0].stderr)
+                    expected = ("ownership of 10.0.2.20 for "
+                                if function == "reconcileAzureCesIP"
+                                else "Refusing unexpected local configuration")
+                    self.assertIn(expected, runs[0].stderr)
                     self.assertFalse(any("create" in c or "delete" in c or c[0] == "guest"
                                          for c in calls))
         finally:
