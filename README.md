@@ -158,12 +158,23 @@ guarantee is made.
 python3 -m unittest discover -s tests -v
 ```
 
-Patcher tests have no external dependencies. Hook behavior tests additionally
-need an entitled original, `jq`, and IBM `mmksh`:
+Patcher tests have no external dependencies. Hook behavior tests need `jq` and
+a Korn shell with ksh93 static function scoping. Without an entitled original,
+they exercise the replacement functions with a test-only callback dispatcher.
+CI runs these tests with Linux ksh93; this does not replace target IBM `mmksh`
+validation.
+
+On a target node, from the repository root, run:
+
+```sh
+KSH=/usr/lpp/mmfs/bin/mmksh python3 -m unittest tests.test_hook_behavior -v
+```
+
+To also exercise reconstruction and the original IBM dispatcher:
 
 ```sh
 export IBM_AZURE_HOOK=/secure/mmcesExtendedIpMgmt.azure
-python3 -m unittest discover -s tests -v
+KSH=/usr/lpp/mmfs/bin/mmksh python3 -m unittest discover -s tests -v
 ```
 
 Tests mock Azure, CES, metadata and guest-network operations, without cloud
@@ -173,3 +184,7 @@ including cross-resource-group peer release and local deletion retries.
 Set `JQ` if it is not on PATH. Windows uses Git Bash and an emulated
 lock rather than native Korn-shell/flock semantics. Do not commit entitled
 originals or generated hooks.
+
+Discovery context and peer-resolution outputs are shared globals within one
+hook invocation. Do not redeclare them as caller-local `typeset` variables:
+ksh93 `function`-syntax helpers cannot populate another function's local scope.

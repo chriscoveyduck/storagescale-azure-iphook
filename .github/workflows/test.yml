@@ -16,3 +16,15 @@ jobs:
         with:
           python-version: '3.9'
       - run: python -m unittest discover -s tests -v
+  korn-shell:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+      - run: sudo apt-get update -qq && sudo apt-get install -y ksh93u+m jq
+      - run: test -x /usr/bin/ksh93 && command -v jq
+      - run: python -m unittest tests.test_hook_behavior -v
+        env:
+          KSH: /usr/bin/ksh93
